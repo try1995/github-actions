@@ -27,6 +27,7 @@ github-actions/
 | 名称 | 值 | 说明 |
 |---|---|---|
 | `STOCK_CODE` | `601601\|002185` | 股票代码，多只用 `\|` 分隔，自动识别沪/深/北交所 |
+| `HF_ENDPOINT` | `https://huggingface.co` | 模型下载地址（可选）。默认官方站，GitHub 官方 runner 直连。国内自建 runner 可改成 `https://hf-mirror.com` |
 
 不配置的话脚本会用默认值 `601601|002185`。
 
@@ -61,6 +62,7 @@ github-actions/
 - **邮箱收到空白/报错**：确认 `SMTP_PASS` 填的是 QQ 邮箱**授权码**而非登录密码；`SMTP_PROTOCOL` 与端口匹配（465→ssl，587→starttls）。
 - **收不到邮件但日志显示发送成功**：检查垃圾邮件文件夹；确认 `SMTP_RECIPIENT` 拼写。
 - **GitHub Actions 不运行**：仓库超过 60 天无活动会自动禁用定时工作流，到 Actions 页面点 **Enable workflow** 重新启用。
+- **报错 `KronosTokenizer.__init__() missing 16 required positional arguments`**：模型配置下载失败。脚本本地默认走国内镜像 `hf-mirror.com`，而 GitHub 官方 runner 在国外连不上镜像。工作流里已默认用官方 `https://huggingface.co`（见 `HF_ENDPOINT`），无需处理；若手动改了记得改回。
 - **每次都要重新下载模型**：首次运行会下载 Kronos 模型（约几百 MB），之后走缓存，会快很多。
 
 ## 邮件内容

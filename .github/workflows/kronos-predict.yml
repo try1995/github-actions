@@ -15,6 +15,10 @@ env:
   # 股票代码在仓库 Settings -> Secrets and variables -> Actions -> Variables 里配 STOCK_CODE
   # 未配置时脚本回退到默认值 "601601|002185"
   STOCK_CODE: ${{ vars.STOCK_CODE }}
+  # 模型下载地址：GitHub 官方 runner 在国外，直连官方 huggingface.co 更快更稳。
+  # 脚本默认的 hf-mirror.com 是国内镜像，在 CI 上可能连不上导致"from_pretrained 下载 config 失败"。
+  # 若用国内自建 runner，可在 Variables 里加 HF_ENDPOINT=https://hf-mirror.com 覆盖。
+  HF_ENDPOINT: ${{ vars.HF_ENDPOINT || 'https://huggingface.co' }}
 
 jobs:
   predict:
