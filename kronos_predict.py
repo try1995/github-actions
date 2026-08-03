@@ -15,6 +15,7 @@ STOCK_CODE 可通过环境变量配置（GitHub Actions 里用仓库 Variables�
 import glob
 import os
 import smtplib
+import socket
 import sys
 import time
 import warnings
@@ -580,6 +581,45 @@ def run_prediction(tf: dict, predictor: KronosPredictor, stock_code: str, market
 
 
 # ==================== 邮件发送 ====================
+def _connect_ipv4(host: str, port: int, timeout):
+    """
+    建立 IPv4 TCP 连接。
+
+    海外 GitHub Actions runner 常无 IPv6 路由，smtplib 默认按 getaddrinfo 顺序
+    先连 IPv6 地址会报 [Errno 101] Network is unreachable。这里强制只走 IPv4。
+    """
+    infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+    last_exc = None
+    for af, socktype, proto, _, sa in infos:
+        s = socket.socket(af, socktype, proto)
+        try:
+            if isinstance(timeout, (int, float)):
+                s.settimeout(timeout)
+            s.connect(sa)
+            return s
+        except OSError as exc:
+            last_exc = exc
+            s.close()
+    if last_exc is not None:
+        raise last_exc
+    raise OSError(f"无法解析 {host} 的 IPv4 地址，无法连接邮件服务器")
+
+
+class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
+    """强制 IPv4 的 SMTP_SSL（465/SSL）。"""
+
+    def _get_socket(self, host, port, timeout):
+        sock = _connect_ipv4(host, port, timeout)
+        return self.context.wrap_socket(sock, server_hostname=self._host)
+
+
+class _IPv4SMTP(smtplib.SMTP):
+    """强制 IPv4 的 SMTP（587/STARTTLS）。"""
+
+    def _get_socket(self, host, port, timeout):
+        return _connect_ipv4(host, port, timeout)
+
+
 def send_email():
     """
     将 outputs/ 目录下的预测 K 线图（PNG）作为附件、预测摘要作为正文发送邮件。
@@ -655,14 +695,14 @@ def send_email():
 
     recipients = [r.strip() for r in recipient.replace(";", ",").split(",") if r.strip()]
 
-    # ---- 发送 ----
+    # ---- 发送（强制 IPv4，海外 runner 无 IPv6 路由）----
     try:
         if protocol == "ssl":
-            with smtplib.SMTP_SSL(host, port, timeout=60) as server:
+            with _IPv4SMTP_SSL(host, port, timeout=60) as server:
                 server.login(user, password)
                 server.sendmail(user, recipients, msg.as_string())
         else:
-            with smtplib.SMTP(host, port, timeout=60) as server:
+            with _IPv4SMTP(host, port, timeout=60) as server:
                 server.starttls()
                 server.login(user, password)
                 server.sendmail(user, recipients, msg.as_string())

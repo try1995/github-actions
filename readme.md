@@ -9,7 +9,7 @@
 
 ## 目录结构
 
-```
+```text
 github-actions/
 ├── .github/workflows/kronos-predict.yml   # GitHub Actions 工作流（定时调度）
 ├── kronos_predict.py                      # 主脚本：拉数据 -> 预测 -> 出图 -> 发邮件
@@ -25,7 +25,7 @@ github-actions/
 进入仓库 **Settings → Secrets and variables → Actions → Variables**，点 **New repository variable**：
 
 | 名称 | 值 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | `STOCK_CODE` | `601601\|002185` | 股票代码，多只用 `\|` 分隔，自动识别沪/深/北交所 |
 | `HF_ENDPOINT` | `https://huggingface.co` | 模型下载地址（可选）。默认官方站，GitHub 官方 runner 直连。国内自建 runner 可改成 `https://hf-mirror.com` |
 
@@ -36,7 +36,7 @@ github-actions/
 同样位置，切到 **Secrets** 页签，点 **New repository secret**，逐个添加：
 
 | 名称 | 示例值 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | `SMTP_HOST` | `smtp.qq.com` | SMTP 服务器地址 |
 | `SMTP_PORT` | `465` | SSL 用 465；STARTTLS 用 587 |
 | `SMTP_PROTOCOL` | `ssl` | `ssl` 或 `starttls` |
@@ -63,6 +63,7 @@ github-actions/
 - **收不到邮件但日志显示发送成功**：检查垃圾邮件文件夹；确认 `SMTP_RECIPIENT` 拼写。
 - **GitHub Actions 不运行**：仓库超过 60 天无活动会自动禁用定时工作流，到 Actions 页面点 **Enable workflow** 重新启用。
 - **报错 `KronosTokenizer.__init__() missing 16 required positional arguments`**：模型配置下载失败。脚本本地默认走国内镜像 `hf-mirror.com`，而 GitHub 官方 runner 在国外连不上镜像。工作流里已默认用官方 `https://huggingface.co`（见 `HF_ENDPOINT`），无需处理；若手动改了记得改回。
+- **邮件报错 `[Errno 101] Network is unreachable`**：GitHub 官方 runner 在海外，通常连不上国内 QQ/163 的 SMTP 服务器。脚本已强制走 IPv4 提高成功率（QQ 服务器有 IPv4 地址）。若仍失败，说明 QQ SMTP 被国外网络完全拦截，需换一个国外可达的 SMTP 服务商（免费中继 Brevo/SendGrid，或 Gmail 应用专用密码），**收件人仍可填 QQ 邮箱**，只需改 Secrets 里的 `SMTP_HOST/PORT/PROTOCOL/USER/PASS`。
 - **每次都要重新下载模型**：首次运行会下载 Kronos 模型（约几百 MB），之后走缓存，会快很多。
 
 ## 邮件内容
