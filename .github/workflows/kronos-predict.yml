@@ -1,0 +1,64 @@
+name: Kronos 股票预测
+
+# 每天 08:00 和 11:30 北京时间自动运行（GitHub cron 使用 UTC，北京 = UTC+8）：
+#   08:00 北京 = 00:00 UTC  ->  "0 0 * * 1-5"
+#   11:30 北京 = 03:30 UTC  ->  "30 3 * * 1-5"
+# 1-5 表示周一至周五，周末不开盘不发邮件。
+# 也可通过 "Run workflow" 按钮手动触发一次。
+on:
+  schedule:
+    - cron: "0 0 * * 1-5"
+    - cron: "30 3 * * 1-5"
+  workflow_dispatch: {}
+
+env:
+  # 股票代码在仓库 Settings -> Secrets and variables -> Actions -> Variables 里配 STOCK_CODE
+  # 未配置时脚本回退到默认值 "601601|002185"
+  STOCK_CODE: ${{ vars.STOCK_CODE }}
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 缓存 HuggingFace 模型，避免每次重复下载 Kronos-base（几百 MB）
+      - name: Cache HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: ${{ runner.os }}-huggingface-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-huggingface-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 邮箱配置在仓库 Settings -> Secrets and variables -> Actions -> Secrets 里设置：
+      #   SMTP_HOST=smtp.qq.com  SMTP_PORT=465  SMTP_PROTOCOL=ssl
+      #   SMTP_USER=<QQ邮箱>     SMTP_PASS=<QQ邮箱授权码>   SMTP_RECIPIENT=<收件邮箱>
+      - name: Run prediction and send email
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_PROTOCOL: ${{ secrets.SMTP_PROTOCOL }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_RECIPIENT: ${{ secrets.SMTP_RECIPIENT }}
+        run: python kronos_predict.py

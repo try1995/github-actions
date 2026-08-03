@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 预测产物（K 线图 + CSV），不入库
+outputs/
+
+# 环境
+.env
