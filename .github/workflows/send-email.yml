@@ -19,8 +19,8 @@ jobs:
         uses: dawidd6/action-send-mail@v18
         with:
           server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT || '465' }}
-          secure: ${{ (secrets.SMTP_PROTOCOL || 'ssl') == 'ssl' }}
+          server_port: 465
+          secure: true
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
           subject: "Hello from GitHub Actions"
