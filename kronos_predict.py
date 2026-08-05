@@ -775,6 +775,9 @@ def main():
         for tf in TIMEFRAMES:
             print(f"   - {code} {tf['label']}: pred_{code}_{tf['file_tag']}_data.csv / _chart.png")
 
+    # ---- 步骤3：生成邮件摘要，写入 outputs/summary.txt（供 GitHub Actions 的 action-send-mail 作为正文读取）----
+    write_summary_file(build_summary())
+
 
 if __name__ == "__main__":
     main()

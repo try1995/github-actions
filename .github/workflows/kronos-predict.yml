@@ -81,5 +81,5 @@ jobs:
           to: ${{ secrets.SMTP_RECIPIENT }}
           from: ${{ secrets.SMTP_USER }}
           body: file://outputs/summary.txt
-          attachments: outputs/*_chart.png
+          attachments: ./outputs/*_chart.png
           nodemailerlog: true
