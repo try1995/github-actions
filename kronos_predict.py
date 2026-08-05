@@ -9,9 +9,10 @@ main.py - Kronos 股票预测脚本
 可同时预测多只股票（STOCK_CODE 用 | 分隔，如 "601601|002185"），
 STOCK_CODE 可通过环境变量配置（GitHub Actions 里用仓库 Variables），不设置时用默认值。
 每次运行会为每只股票按 TIMEFRAMES 配置生成多个周期的 K 线预测图（日线 + 5分钟），
-并配置 SMTP 环境变量后自动把 K 线图和预测摘要发送到邮箱。
+并配置 SMTP 环境变量后自动把 HTML 邮件（K 线图以内嵌图片形式显示在正文）和预测摘要发送到邮箱。
 """
 
+import base64
 import glob
 import os
 import smtplib
@@ -20,6 +21,7 @@ import sys
 import time
 import warnings
 from datetime import datetime, timedelta
+from html import escape
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -620,20 +622,17 @@ class _IPv4SMTP(smtplib.SMTP):
         return _connect_ipv4(host, port, timeout)
 
 
-def build_summary() -> str:
+def _collect_summaries() -> list:
     """
-    从 outputs/ 下的 *_data.csv 生成纯文本预测摘要，作为邮件正文。
+    从 outputs/ 下的 *_data.csv 收集每只股票每个周期的预测摘要。
 
-    返回多行字符串，示例：
-        Kronos 股票预测日报 - 2026-08-05 10:30
-
-        【601601 日线】
-          当前价: 3.45 元 | 预测 12 根后: 3.50 元 (+1.45%)
+    返回 dict 列表，每项包含：code, tag, label, current, final_pred, change,
+    pred_min, pred_max, pred_mean, n_bars, chart（文件名或 None）, pred_start, pred_end。
     """
     tf_label = {"5min": "5分钟", "daily": "日线"}
-    summary_lines = [f"Kronos 股票预测日报 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
+    summaries = []
     for csv_path in sorted(glob.glob(os.path.join(OUTPUT_DIR, "*_data.csv"))):
-        base = os.path.basename(csv_path)  # pred_601601_daily_data.csv
+        base = os.path.basename(csv_path)              # pred_601601_daily_data.csv
         code_tf = base[len("pred_"):-len("_data.csv")]  # 601601_daily
         code, _, tag = code_tf.rpartition("_")
         if not code:
@@ -644,29 +643,215 @@ def build_summary() -> str:
             pred = df[df["type"] == "预测"]
             if hist.empty or pred.empty:
                 continue
-            current = float(hist["close"].iloc[-1])
-            final_pred = float(pred["close"].iloc[-1])
-            change = (final_pred / current - 1) * 100
-            label = tf_label.get(tag, tag)
-            summary_lines.append(f"【{code} {label}】")
-            summary_lines.append(f"  当前价: {current:.2f} 元 | 预测 {len(pred)} 根后: {final_pred:.2f} 元 ({change:+.2f}%)")
-            summary_lines.append("")
+            chart_name = f"pred_{code}_{tag}_chart.png"
+            chart_path = os.path.join(OUTPUT_DIR, chart_name)
+            summaries.append({
+                "code": code,
+                "tag": tag,
+                "label": tf_label.get(tag, tag),
+                "current": float(hist["close"].iloc[-1]),
+                "final_pred": float(pred["close"].iloc[-1]),
+                "change": (float(pred["close"].iloc[-1]) / float(hist["close"].iloc[-1]) - 1) * 100,
+                "pred_min": float(pred["close"].min()),
+                "pred_max": float(pred["close"].max()),
+                "pred_mean": float(pred["close"].mean()),
+                "n_bars": len(pred),
+                "chart": chart_name if os.path.exists(chart_path) else None,
+                "pred_start": pred["datetime"].iloc[0],
+                "pred_end": pred["datetime"].iloc[-1],
+            })
         except Exception as e:
             print(f"⚠️ 解析 {csv_path} 生成摘要失败: {e}")
-    return "\n".join(summary_lines)
+    return summaries
+
+
+def build_summary_text() -> str:
+    """生成纯文本预测摘要（HTML 正文之外的 text 部分，供不支持 HTML 的客户端回退）。"""
+    lines = [f"Kronos 股票预测日报 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
+    for s in _collect_summaries():
+        lines.append(f"【{s['code']} {s['label']}】")
+        lines.append(f"  当前价: {s['current']:.2f} 元 | 预测 {s['n_bars']} 根后: {s['final_pred']:.2f} 元 ({s['change']:+.2f}%)")
+        lines.append(f"  预测区间: 最低 {s['pred_min']:.2f} / 最高 {s['pred_max']:.2f} / 均价 {s['pred_mean']:.2f} 元")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _dir_color(change: float) -> str:
+    """A 股配色：涨红跌绿。"""
+    return "#dc2626" if change >= 0 else "#16a34a"
+
+
+def _fmt_pred_range(start, end) -> str:
+    """把预测起止时间格式化成可读区间（分钟级精确到时分，日级精确到日期）。"""
+    try:
+        s = pd.to_datetime(start)
+        e = pd.to_datetime(end)
+        if (e - s).total_seconds() < 24 * 3600:
+            return f"{s.strftime('%m-%d %H:%M')} ~ {e.strftime('%m-%d %H:%M')}"
+        return f"{s.strftime('%Y-%m-%d')} ~ {e.strftime('%Y-%m-%d')}"
+    except Exception:
+        return f"{start} ~ {end}"
+
+
+def _stat_cell(label: str, value: str, sub: str = "", color: str = "#0f172a") -> str:
+    """HTML 邮件里的一个统计格（表格布局 + 内联样式，跨邮件客户端兼容）。"""
+    sub_html = f'<div style="font-size:11px;color:#94a3b8;margin-top:4px;">{sub}</div>' if sub else ""
+    return (
+        f'<td align="center" style="padding:10px 6px;vertical-align:top;">'
+        f'<div style="font-size:12px;color:#64748b;margin-bottom:6px;">{label}</div>'
+        f'<div style="font-size:20px;font-weight:700;color:{color};">{value}</div>'
+        f'{sub_html}'
+        f'</td>'
+    )
+
+
+def _chart_data_uri(chart_name: str) -> str:
+    """读取 K 线图 PNG，转成 base64 data URI 直接内嵌进 HTML 正文（HTML 自包含，不引用本地文件）。"""
+    path = os.path.join(OUTPUT_DIR, chart_name)
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
+def _summary_card(s: dict) -> str:
+    """单个股票×周期的摘要卡片：统计区 + 内嵌 K 线图（二进制 base64 直接写在 img 里）。"""
+    code = escape(s["code"])
+    color = _dir_color(s["change"])
+    arrow = "▲" if s["change"] >= 0 else "▼"
+    range_str = _fmt_pred_range(s["pred_start"], s["pred_end"])
+    chart_html = ""
+    if s["chart"]:
+        chart_html = (
+            f'<tr><td style="padding:2px 20px 20px;">'
+            f'<img src="{_chart_data_uri(s["chart"])}" alt="{code} {escape(s["label"])} K线预测图" '
+            f'style="width:100%;height:auto;border-radius:8px;border:1px solid #e2e8f0;display:block;">'
+            f'</td></tr>'
+        )
+    return f'''
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin:14px 0;">
+      <tr>
+        <td style="padding:16px 20px 6px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="font-size:16px;font-weight:700;color:#0f172a;">{code}
+                <span style="display:inline-block;font-size:12px;font-weight:400;color:#ffffff;background:#3b82f6;border-radius:4px;padding:2px 8px;margin-left:8px;vertical-align:middle;">{escape(s["label"])}</span>
+              </td>
+              <td align="right" style="font-size:12px;color:#64748b;">预测 {s["n_bars"]} 根 K 线</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:4px 20px 8px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              {_stat_cell("当前价", f'{s["current"]:.2f}', "元")}
+              {_stat_cell("预测收盘", f'{s["final_pred"]:.2f}', "元", color)}
+              {_stat_cell("预测涨跌幅", f'{arrow} {s["change"]:+.2f}%', "", color)}
+              {_stat_cell("预测区间均价", f'{s["pred_mean"]:.2f}', "元")}
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0 20px 12px;font-size:11px;color:#94a3b8;">
+          预测区间最低 {s["pred_min"]:.2f} 元 · 最高 {s["pred_max"]:.2f} 元 · 时间 {escape(range_str)}
+        </td>
+      </tr>
+      {chart_html}
+    </table>'''
+
+
+def _stock_header(code: str) -> str:
+    code = escape(code)
+    return f'''
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 2px;">
+      <tr>
+        <td style="border-left:4px solid #2563eb;padding-left:10px;font-size:15px;font-weight:700;color:#0f172a;">📌 股票 {code}</td>
+      </tr>
+    </table>'''
+
+
+def build_summary() -> str:
+    """
+    生成好看的 HTML 邮件正文（内联样式 + 表格布局，兼容主流邮件客户端）。
+
+    K 线图以 base64 data URI 直接内嵌进 HTML（<img src="data:image/png;base64,...">），
+    生成的 summary.html 是自包含文件，不引用任何本地文件，
+    可作为 GitHub Actions 里 dawidd6/action-send-mail 的 html_body 直接发送。
+    纯文本版本见 build_summary_text()（供不支持 HTML 的客户端回退）。
+    """
+    summaries = _collect_summaries()
+    if not summaries:
+        return "<html><body><p>本次未生成任何预测摘要。</p></body></html>"
+
+    # 按股票代码分组，保持原有 CSV 顺序
+    by_code = {}
+    for s in summaries:
+        by_code.setdefault(s["code"], []).append(s)
+
+    body_html = "".join(
+        _stock_header(code) + "".join(_summary_card(s) for s in items)
+        for code, items in by_code.items()
+    )
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    return f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kronos 股票预测日报</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:'Microsoft YaHei','PingFang SC','Helvetica Neue',Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f1f5f9;">
+    <tr>
+      <td align="center" style="padding:28px 16px;">
+        <table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" style="max-width:680px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(15,23,42,0.08);">
+          <tr>
+            <td style="background:linear-gradient(135deg,#1e3a8a,#2563eb);padding:26px 32px;">
+              <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">📈 Kronos 股票预测日报</h1>
+              <p style="margin:8px 0 0;color:#bfdbfe;font-size:13px;">生成时间：{now_str} · A股 K线 智能预测</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 32px 24px;">
+              {body_html}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;">
+              <p style="margin:0;font-size:11px;color:#94a3b8;line-height:1.7;">
+                免责声明：本邮件由 Kronos 时间序列模型自动生成，预测结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。<br>
+                Generated by Kronos · GitHub Actions
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>'''
 
 
 def write_summary_file(summary: str) -> None:
-    """把摘要写入 outputs/summary.txt，供 GitHub Actions 的 dawidd6/action-send-mail 作为正文读取。"""
-    path = os.path.join(OUTPUT_DIR, "summary.txt")
-    with open(path, "w", encoding="utf-8") as f:
+    """把 HTML 摘要写入 outputs/summary.html，并同时写一份纯文本 outputs/summary.txt。"""
+    html_path = os.path.join(OUTPUT_DIR, "summary.html")
+    with open(html_path, "w", encoding="utf-8") as f:
         f.write(summary)
-    print(f"📄 邮件摘要已写入 {path}")
+    txt_path = os.path.join(OUTPUT_DIR, "summary.txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(build_summary_text())
+    print(f"📄 邮件摘要已写入 {html_path}（K线图内嵌）与 {txt_path}")
 
 
 def send_email():
     """
-    将 outputs/ 目录下的预测 K 线图（PNG）作为附件、预测摘要作为正文发送邮件。
+    将 outputs/ 目录下的预测 K 线图（PNG）以 base64 形式内嵌进 HTML 邮件正文并发送。
+
+    正文为 multipart/alternative：纯文本摘要（回退）+ HTML（图片已二进制内嵌）；
+    预测图同时作为附件附加，方便下载原图。
 
     配置通过环境变量注入（GitHub Actions 里用仓库 Secrets 配置）：
         SMTP_HOST        SMTP 服务器，如 smtp.qq.com
@@ -681,9 +866,10 @@ def send_email():
     注意：GitHub Actions 中发信已改由 dawidd6/action-send-mail 完成（见 .github/workflows/kronos-predict.yml），
     本函数仅在本地/独立运行时使用。
     """
-    # ---- 生成摘要：无论是否用 smtplib 直发，都先写入 outputs/summary.txt，供 GitHub Actions 的 action-send-mail 读取 ----
-    summary = build_summary()
-    write_summary_file(summary)
+    # ---- 生成摘要：无论是否用 smtplib 直发，都先写入 outputs/summary.html 和 summary.txt，供 GitHub Actions 的 action-send-mail 读取 ----
+    summary_html = build_summary()
+    write_summary_file(summary_html)
+    summary_text = build_summary_text()
 
     host = os.environ.get("SMTP_HOST", "").strip()
     user = os.environ.get("SMTP_USER", "").strip()
@@ -699,19 +885,22 @@ def send_email():
         port = 465
     protocol = os.environ.get("SMTP_PROTOCOL", "ssl").strip().lower()
 
-    # ---- 收集预测图（本地直发时作为附件）----
+    # ---- 收集预测图（HTML 已内嵌 base64 图片，这里再作为附件附加，方便下载原图）----
     chart_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "*_chart.png")))
     if not chart_files:
         print("⚠️ outputs/ 下没有预测图，本次只发送文字摘要")
 
-    body = summary
-
-    # ---- 组装邮件 ----
+    # ---- 组装邮件：multipart/alternative(纯文本 | HTML，图片已二进制内嵌) + 图片附件 ----
+    # 纯文本在前，HTML 在后，客户端优先显示 HTML；不支持 HTML 时回退纯文本。
     msg = MIMEMultipart()
     msg["From"] = user
     msg["To"] = recipient
     msg["Subject"] = f"Kronos 股票预测日报 {datetime.now().strftime('%Y-%m-%d')}"
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(summary_text, "plain", "utf-8"))
+    alt.attach(MIMEText(summary_html, "html", "utf-8"))
+    msg.attach(alt)
 
     for chart in chart_files:
         with open(chart, "rb") as f:
@@ -733,7 +922,7 @@ def send_email():
                 server.starttls()
                 server.login(user, password)
                 server.sendmail(user, recipients, msg.as_string())
-        print(f"✅ 邮件已发送至 {recipient}（附件 {len(chart_files)} 张图）")
+        print(f"✅ 邮件已发送至 {recipient}（正文内嵌 {len(chart_files)} 张 K 线图，并附加原图）")
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
         raise

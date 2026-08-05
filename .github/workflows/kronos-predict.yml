@@ -67,7 +67,11 @@ jobs:
         id: date
         run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
-      # 用 dawidd6/action-send-mail 发送：正文读 outputs/summary.txt（脚本生成），附件为预测 K 线图。
+      # 用 dawidd6/action-send-mail 发送：
+      #   - html_body 读 outputs/summary.html（脚本生成，K 线图以 base64 二进制直接内嵌在 HTML 里，
+      #     正文直接显示图片，summary.html 为自包含文件、不引用本地文件）；
+      #   - body 读 outputs/summary.txt（纯文本回退，供不支持 HTML 的客户端）；
+      #   - attachments 为 K 线图 PNG 原图，方便下载。
       # SMTP_RECIPIENT 若为多个收件人，请用英文逗号分隔。
       - name: Send mail
         uses: dawidd6/action-send-mail@v18
@@ -80,6 +84,7 @@ jobs:
           subject: Kronos 股票预测日报 ${{ steps.date.outputs.date }}
           to: ${{ secrets.SMTP_RECIPIENT }}
           from: ${{ secrets.SMTP_USER }}
-          body: file://outputs/summary.txt
-          attachments: ./outputs/*_chart.png
+          # body: file://outputs/summary.txt
+          html_body: file://outputs/summary.html
+          # attachments: ./outputs/*_chart.png
           nodemailerlog: true
