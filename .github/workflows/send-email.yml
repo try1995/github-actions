@@ -1,0 +1,30 @@
+name: 测试发邮件
+
+# 每天 08:00 和 11:30 北京时间自动运行（GitHub cron 使用 UTC，北京 = UTC+8）：
+#   08:00 北京 = 00:00 UTC  ->  "0 0 * * 1-5"
+#   11:30 北京 = 03:30 UTC  ->  "30 3 * * 1-5"
+# 1-5 表示周一至周五，周末不开盘不发邮件。
+# 也可通过 "Run workflow" 按钮手动触发一次。
+on:
+  schedule:
+    - cron: "0 0 * * 1-5"
+    - cron: "30 3 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send mail
+        uses: dawidd6/action-send-mail@v18
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT || '465' }}
+          secure: ${{ (secrets.SMTP_PROTOCOL || 'ssl') == 'ssl' }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "Hello from GitHub Actions"
+          to: ${{ secrets.SMTP_RECIPIENT }}
+          from: ${{ secrets.SMTP_USER }}
+          body: "Hello, this is a test email from GitHub Actions."
+          nodemailerlog: true
