@@ -775,9 +775,6 @@ def main():
         for tf in TIMEFRAMES:
             print(f"   - {code} {tf['label']}: pred_{code}_{tf['file_tag']}_data.csv / _chart.png")
 
-    # ---- 步骤3：发送邮件（未配置 SMTP 则自动跳过）----
-    send_email()
-
 
 if __name__ == "__main__":
     main()
