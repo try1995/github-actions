@@ -57,12 +57,29 @@ jobs:
       # 邮箱配置在仓库 Settings -> Secrets and variables -> Actions -> Secrets 里设置：
       #   SMTP_HOST=smtp.qq.com  SMTP_PORT=465  SMTP_PROTOCOL=ssl
       #   SMTP_USER=<QQ邮箱>     SMTP_PASS=<QQ邮箱授权码>   SMTP_RECIPIENT=<收件邮箱>
-      - name: Run prediction and send email
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_PROTOCOL: ${{ secrets.SMTP_PROTOCOL }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SMTP_RECIPIENT: ${{ secrets.SMTP_RECIPIENT }}
+      # 注意：邮件已改由下方 dawidd6/action-send-mail 步骤发送。
+      # 本步骤不再注入 SMTP_* 环境变量，脚本只会生成预测与 outputs/summary.txt，不再用 smtplib 发信，避免重复发信。
+      - name: Run prediction
         run: python kronos_predict.py
+
+      # 取当天日期放进邮件主题
+      - name: Get date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+      # 用 dawidd6/action-send-mail 发送：正文读 outputs/summary.txt（脚本生成），附件为预测 K 线图。
+      # SMTP_RECIPIENT 若为多个收件人，请用英文逗号分隔。
+      - name: Send mail
+        uses: dawidd6/action-send-mail@v4
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT || '465' }}
+          secure: ${{ (secrets.SMTP_PROTOCOL || 'ssl') == 'ssl' }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: Kronos 股票预测日报 ${{ steps.date.outputs.date }}
+          to: ${{ secrets.SMTP_RECIPIENT }}
+          from: ${{ secrets.SMTP_USER }}
+          body: file://outputs/summary.txt
+          attachments: outputs/*_chart.png
+          nodemailerlog: true

@@ -620,39 +620,16 @@ class _IPv4SMTP(smtplib.SMTP):
         return _connect_ipv4(host, port, timeout)
 
 
-def send_email():
+def build_summary() -> str:
     """
-    将 outputs/ 目录下的预测 K 线图（PNG）作为附件、预测摘要作为正文发送邮件。
+    从 outputs/ 下的 *_data.csv 生成纯文本预测摘要，作为邮件正文。
 
-    配置通过环境变量注入（GitHub Actions 里用仓库 Secrets 配置）：
-        SMTP_HOST        SMTP 服务器，如 smtp.qq.com
-        SMTP_PORT        SMTP 端口，SSL 通常 465，STARTTLS 通常 587
-        SMTP_PROTOCOL    ssl 或 starttls（默认 ssl）
-        SMTP_USER        发件邮箱账号
-        SMTP_PASS        发件邮箱密码 / 授权码（QQ/163 用授权码）
-        SMTP_RECIPIENT   收件邮箱，多个用逗号或分号分隔
+    返回多行字符串，示例：
+        Kronos 股票预测日报 - 2026-08-05 10:30
 
-    未配置 SMTP 环境变量时静默跳过（本地跑不配邮箱不报错）。
+        【601601 日线】
+          当前价: 3.45 元 | 预测 12 根后: 3.50 元 (+1.45%)
     """
-    host = os.environ.get("SMTP_HOST", "").strip()
-    user = os.environ.get("SMTP_USER", "").strip()
-    password = os.environ.get("SMTP_PASS", "").strip()
-    recipient = os.environ.get("SMTP_RECIPIENT", "").strip()
-    if not (host and user and password and recipient):
-        print("📧 未配置 SMTP 环境变量（SMTP_HOST/SMTP_USER/SMTP_PASS/SMTP_RECIPIENT），跳过邮件发送")
-        return
-
-    try:
-        port = int(os.environ.get("SMTP_PORT", "465"))
-    except ValueError:
-        port = 465
-    protocol = os.environ.get("SMTP_PROTOCOL", "ssl").strip().lower()
-
-    # ---- 收集预测图 + 从 CSV 生成摘要 ----
-    chart_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "*_chart.png")))
-    if not chart_files:
-        print("⚠️ outputs/ 下没有预测图，本次只发送文字摘要")
-
     tf_label = {"5min": "5分钟", "daily": "日线"}
     summary_lines = [f"Kronos 股票预测日报 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
     for csv_path in sorted(glob.glob(os.path.join(OUTPUT_DIR, "*_data.csv"))):
@@ -676,8 +653,58 @@ def send_email():
             summary_lines.append("")
         except Exception as e:
             print(f"⚠️ 解析 {csv_path} 生成摘要失败: {e}")
+    return "\n".join(summary_lines)
 
-    body = "\n".join(summary_lines)
+
+def write_summary_file(summary: str) -> None:
+    """把摘要写入 outputs/summary.txt，供 GitHub Actions 的 dawidd6/action-send-mail 作为正文读取。"""
+    path = os.path.join(OUTPUT_DIR, "summary.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(summary)
+    print(f"📄 邮件摘要已写入 {path}")
+
+
+def send_email():
+    """
+    将 outputs/ 目录下的预测 K 线图（PNG）作为附件、预测摘要作为正文发送邮件。
+
+    配置通过环境变量注入（GitHub Actions 里用仓库 Secrets 配置）：
+        SMTP_HOST        SMTP 服务器，如 smtp.qq.com
+        SMTP_PORT        SMTP 端口，SSL 通常 465，STARTTLS 通常 587
+        SMTP_PROTOCOL    ssl 或 starttls（默认 ssl）
+        SMTP_USER        发件邮箱账号
+        SMTP_PASS        发件邮箱密码 / 授权码（QQ/163 用授权码）
+        SMTP_RECIPIENT   收件邮箱，多个用逗号或分号分隔
+
+    未配置 SMTP 环境变量时静默跳过（本地跑不配邮箱不报错）。
+
+    注意：GitHub Actions 中发信已改由 dawidd6/action-send-mail 完成（见 .github/workflows/kronos-predict.yml），
+    本函数仅在本地/独立运行时使用。
+    """
+    # ---- 生成摘要：无论是否用 smtplib 直发，都先写入 outputs/summary.txt，供 GitHub Actions 的 action-send-mail 读取 ----
+    summary = build_summary()
+    write_summary_file(summary)
+
+    host = os.environ.get("SMTP_HOST", "").strip()
+    user = os.environ.get("SMTP_USER", "").strip()
+    password = os.environ.get("SMTP_PASS", "").strip()
+    recipient = os.environ.get("SMTP_RECIPIENT", "").strip()
+    if not (host and user and password and recipient):
+        print("📧 未配置 SMTP 环境变量（SMTP_HOST/SMTP_USER/SMTP_PASS/SMTP_RECIPIENT），跳过 smtplib 直发（CI 中改由 dawidd6/action-send-mail 发送）")
+        return
+
+    try:
+        port = int(os.environ.get("SMTP_PORT", "465"))
+    except ValueError:
+        port = 465
+    protocol = os.environ.get("SMTP_PROTOCOL", "ssl").strip().lower()
+
+    # ---- 收集预测图（本地直发时作为附件）----
+    chart_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "*_chart.png")))
+    if not chart_files:
+        print("⚠️ outputs/ 下没有预测图，本次只发送文字摘要")
+
+    body = summary
 
     # ---- 组装邮件 ----
     msg = MIMEMultipart()
