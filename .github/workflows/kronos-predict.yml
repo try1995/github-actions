@@ -70,7 +70,7 @@ jobs:
       # 用 dawidd6/action-send-mail 发送：正文读 outputs/summary.txt（脚本生成），附件为预测 K 线图。
       # SMTP_RECIPIENT 若为多个收件人，请用英文逗号分隔。
       - name: Send mail
-        uses: dawidd6/action-send-mail@v4
+        uses: dawidd6/action-send-mail@v18
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT || '465' }}
