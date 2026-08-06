@@ -1,14 +1,13 @@
 name: Kronos 股票预测
 
-# 每天 08:00 和 11:30 北京时间自动运行（GitHub cron 使用 UTC，北京 = UTC+8）：
-#   08:00 北京 = 00:00 UTC  ->  "0 0 * * 1-5"
-#   11:30 北京 = 03:30 UTC  ->  "30 3 * * 1-5"
-# 1-5 表示周一至周五，周末不开盘不发邮件。
-# 也可通过 "Run workflow" 按钮手动触发一次。
 on:
   schedule:
-    - cron: "0 0 * * 1-5"
-    - cron: "30 3 * * 1-5"
+    # 早上 8:00 (上海时间)
+    - cron: '0 8 * * *'
+      timezone: "Asia/Shanghai"
+    # 中午 12:00 (上海时间)
+    - cron: '0 12 * * *'
+      timezone: "Asia/Shanghai"
   workflow_dispatch: {}
 
 env:
