@@ -9,6 +9,9 @@ on:
   schedule:
     - cron: "0 0 * * 1-5"
   workflow_dispatch: {}
+  repository_dispatch:
+    types:
+    - curl-event
 
 env:
   # 股票代码在仓库 Settings -> Secrets and variables -> Actions -> Variables 里配 STOCK_CODE
