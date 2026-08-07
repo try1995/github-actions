@@ -6,8 +6,8 @@ name: Kronos 股票预测
 # 1-5 表示周一至周五，周末不开盘不发邮件。
 # 也可通过 "Run workflow" 按钮手动触发一次。
 on:
-  schedule:
-    - cron: "0 0 * * 1-5"
+  # schedule:
+  #   - cron: "0 0 * * 1-5"
   workflow_dispatch: {}
   repository_dispatch:
     types:
