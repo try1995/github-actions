@@ -581,47 +581,6 @@ def run_prediction(tf: dict, predictor: KronosPredictor, stock_code: str, market
     print(f"   预测区间最高: {pred_max:.2f} 元")
     print(f"   预测区间均价: {pred_mean:.2f} 元")
 
-
-# ==================== 邮件发送 ====================
-def _connect_ipv4(host: str, port: int, timeout):
-    """
-    建立 IPv4 TCP 连接。
-
-    海外 GitHub Actions runner 常无 IPv6 路由，smtplib 默认按 getaddrinfo 顺序
-    先连 IPv6 地址会报 [Errno 101] Network is unreachable。这里强制只走 IPv4。
-    """
-    infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
-    last_exc = None
-    for af, socktype, proto, _, sa in infos:
-        s = socket.socket(af, socktype, proto)
-        try:
-            if isinstance(timeout, (int, float)):
-                s.settimeout(timeout)
-            s.connect(sa)
-            return s
-        except OSError as exc:
-            last_exc = exc
-            s.close()
-    if last_exc is not None:
-        raise last_exc
-    raise OSError(f"无法解析 {host} 的 IPv4 地址，无法连接邮件服务器")
-
-
-class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
-    """强制 IPv4 的 SMTP_SSL（465/SSL）。"""
-
-    def _get_socket(self, host, port, timeout):
-        sock = _connect_ipv4(host, port, timeout)
-        return self.context.wrap_socket(sock, server_hostname=self._host)
-
-
-class _IPv4SMTP(smtplib.SMTP):
-    """强制 IPv4 的 SMTP（587/STARTTLS）。"""
-
-    def _get_socket(self, host, port, timeout):
-        return _connect_ipv4(host, port, timeout)
-
-
 def _collect_summaries(stock_code: str = None) -> list:
     """
     从 outputs/ 下的 *_data.csv 收集预测摘要。
@@ -887,8 +846,6 @@ def send_email(stock_code: str):
         port = int(os.environ.get("SMTP_PORT", "465"))
     except ValueError:
         port = 465
-    protocol = os.environ.get("SMTP_PROTOCOL", "ssl").strip().lower()
-
     # ---- 组装邮件：HTML 正文（K 线图已 base64 内嵌），标题包含股票代码 ----
     msg = MIMEMultipart()
     msg["From"] = user
@@ -900,15 +857,10 @@ def send_email(stock_code: str):
 
     # ---- 发送（强制 IPv4，海外 runner 无 IPv6 路由）----
     try:
-        if protocol == "ssl":
-            with _IPv4SMTP_SSL(host, port, timeout=60) as server:
-                server.login(user, password)
-                server.sendmail(user, recipients, msg.as_string())
-        else:
-            with _IPv4SMTP(host, port, timeout=60) as server:
-                server.starttls()
-                server.login(user, password)
-                server.sendmail(user, recipients, msg.as_string())
+        server = smtplib.SMTP_SSL(host, port)
+        server.login(user, password)
+        server.set_debuglevel(0)
+        server.sendmail(user, recipients, msg.as_string())
         n = summary_html.count("data:image/png;base64,")
         print(f"✅ 已发送 {stock_code} 预测邮件至 {recipient}（HTML 内嵌 {n} 张 K 线图）")
     except Exception as e:
