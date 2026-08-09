@@ -857,6 +857,7 @@ def send_email(stock_code: str):
 
     # ---- 发送（强制 IPv4，海外 runner 无 IPv6 路由）----
     try:
+        print(host, port)
         server = smtplib.SMTP_SSL(host, port)
         server.login(user, password)
         server.set_debuglevel(0)
