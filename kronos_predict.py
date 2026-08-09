@@ -9,7 +9,8 @@ main.py - Kronos 股票预测脚本
 可同时预测多只股票（STOCK_CODE 用 | 分隔，如 "601601|002185"），
 STOCK_CODE 可通过环境变量配置（GitHub Actions 里用仓库 Variables），不设置时用默认值。
 每次运行会为每只股票按 TIMEFRAMES 配置生成多个周期的 K 线预测图（日线 + 5分钟），
-并配置 SMTP 环境变量后自动把 HTML 邮件（K 线图以内嵌图片形式显示在正文）和预测摘要发送到邮箱。
+并配置 SMTP 环境变量后，每只股票跑完所有周期就立即发送一封 HTML 邮件
+（K 线图以内嵌图片形式显示在正文，邮件标题包含股票代码）。
 """
 
 import base64
@@ -22,7 +23,6 @@ import time
 import warnings
 from datetime import datetime, timedelta
 from html import escape
-from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -622,9 +622,12 @@ class _IPv4SMTP(smtplib.SMTP):
         return _connect_ipv4(host, port, timeout)
 
 
-def _collect_summaries() -> list:
+def _collect_summaries(stock_code: str = None) -> list:
     """
-    从 outputs/ 下的 *_data.csv 收集每只股票每个周期的预测摘要。
+    从 outputs/ 下的 *_data.csv 收集预测摘要。
+
+    参数：
+        stock_code: 指定时只收集该股票；为 None 时收集全部。
 
     返回 dict 列表，每项包含：code, tag, label, current, final_pred, change,
     pred_min, pred_max, pred_mean, n_bars, chart（文件名或 None）, pred_start, pred_end。
@@ -636,6 +639,8 @@ def _collect_summaries() -> list:
         code_tf = base[len("pred_"):-len("_data.csv")]  # 601601_daily
         code, _, tag = code_tf.rpartition("_")
         if not code:
+            continue
+        if stock_code and code != stock_code:
             continue
         try:
             df = pd.read_csv(csv_path)
@@ -772,16 +777,18 @@ def _stock_header(code: str) -> str:
     </table>'''
 
 
-def build_summary() -> str:
+def build_summary(stock_code: str = None) -> str:
     """
     生成好看的 HTML 邮件正文（内联样式 + 表格布局，兼容主流邮件客户端）。
 
+    参数：
+        stock_code: 指定时只生成该股票的摘要卡片；为 None 时生成全部股票。
+
     K 线图以 base64 data URI 直接内嵌进 HTML（<img src="data:image/png;base64,...">），
-    生成的 summary.html 是自包含文件，不引用任何本地文件，
-    可作为 GitHub Actions 里 dawidd6/action-send-mail 的 html_body 直接发送。
+    生成的 HTML 是自包含文件，不引用任何本地文件。
     纯文本版本见 build_summary_text()（供不支持 HTML 的客户端回退）。
     """
-    summaries = _collect_summaries()
+    summaries = _collect_summaries(stock_code)
     if not summaries:
         return "<html><body><p>本次未生成任何预测摘要。</p></body></html>"
 
@@ -846,37 +853,34 @@ def write_summary_file(summary: str) -> None:
     print(f"📄 邮件摘要已写入 {html_path}（K线图内嵌）与 {txt_path}")
 
 
-def send_email():
+def send_email(stock_code: str):
     """
-    将 outputs/ 目录下的预测 K 线图（PNG）以 base64 形式内嵌进 HTML 邮件正文并发送。
+    发送单只股票的预测邮件（每只股票跑完所有周期后调用一次），邮件标题包含股票代码。
 
-    正文为 multipart/alternative：纯文本摘要（回退）+ HTML（图片已二进制内嵌）；
-    预测图同时作为附件附加，方便下载原图。
-
-    配置通过环境变量注入（GitHub Actions 里用仓库 Secrets 配置）：
-        SMTP_HOST        SMTP 服务器，如 smtp.qq.com
-        SMTP_PORT        SMTP 端口，SSL 通常 465，STARTTLS 通常 587
-        SMTP_PROTOCOL    ssl 或 starttls（默认 ssl）
+    正文为 HTML（K 线图以 base64 二进制内嵌），只包含该股票各周期的摘要卡片；
+    配置与 .github/workflows/kronos-predict.yml 中注入的 SMTP Secrets 一致：
+        SMTP_HOST        发件服务器，如 smtp.qq.com
+        SMTP_PORT        SMTP 端口，SSL 通常 465（默认 465）
+        SMTP_PROTOCOL    ssl 或 starttls（默认 ssl = secure: true）
         SMTP_USER        发件邮箱账号
         SMTP_PASS        发件邮箱密码 / 授权码（QQ/163 用授权码）
         SMTP_RECIPIENT   收件邮箱，多个用逗号或分号分隔
 
     未配置 SMTP 环境变量时静默跳过（本地跑不配邮箱不报错）。
-
-    注意：GitHub Actions 中发信已改由 dawidd6/action-send-mail 完成（见 .github/workflows/kronos-predict.yml），
-    本函数仅在本地/独立运行时使用。
     """
-    # ---- 生成摘要：无论是否用 smtplib 直发，都先写入 outputs/summary.html 和 summary.txt，供 GitHub Actions 的 action-send-mail 读取 ----
-    summary_html = build_summary()
-    write_summary_file(summary_html)
-    summary_text = build_summary_text()
+    # ---- 生成该股票的 HTML 摘要（K 线图 base64 内嵌）----
+    summaries = _collect_summaries(stock_code)
+    if not summaries:
+        print(f"⚠️ 股票 {stock_code} 没有预测结果，跳过发信")
+        return
+    summary_html = build_summary(stock_code=stock_code)
 
     host = os.environ.get("SMTP_HOST", "").strip()
     user = os.environ.get("SMTP_USER", "").strip()
     password = os.environ.get("SMTP_PASS", "").strip()
     recipient = os.environ.get("SMTP_RECIPIENT", "").strip()
     if not (host and user and password and recipient):
-        print("📧 未配置 SMTP 环境变量（SMTP_HOST/SMTP_USER/SMTP_PASS/SMTP_RECIPIENT），跳过 smtplib 直发（CI 中改由 dawidd6/action-send-mail 发送）")
+        print(f"📧 未配置 SMTP 环境变量（SMTP_HOST/SMTP_USER/SMTP_PASS/SMTP_RECIPIENT），跳过 {stock_code} 发信")
         return
 
     try:
@@ -885,29 +889,12 @@ def send_email():
         port = 465
     protocol = os.environ.get("SMTP_PROTOCOL", "ssl").strip().lower()
 
-    # ---- 收集预测图（HTML 已内嵌 base64 图片，这里再作为附件附加，方便下载原图）----
-    chart_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "*_chart.png")))
-    if not chart_files:
-        print("⚠️ outputs/ 下没有预测图，本次只发送文字摘要")
-
-    # ---- 组装邮件：multipart/alternative(纯文本 | HTML，图片已二进制内嵌) + 图片附件 ----
-    # 纯文本在前，HTML 在后，客户端优先显示 HTML；不支持 HTML 时回退纯文本。
+    # ---- 组装邮件：HTML 正文（K 线图已 base64 内嵌），标题包含股票代码 ----
     msg = MIMEMultipart()
     msg["From"] = user
     msg["To"] = recipient
-    msg["Subject"] = f"Kronos 股票预测日报 {datetime.now().strftime('%Y-%m-%d')}"
-
-    alt = MIMEMultipart("alternative")
-    alt.attach(MIMEText(summary_text, "plain", "utf-8"))
-    alt.attach(MIMEText(summary_html, "html", "utf-8"))
-    msg.attach(alt)
-
-    for chart in chart_files:
-        with open(chart, "rb") as f:
-            img = MIMEImage(f.read())
-        img.add_header("Content-Disposition", "attachment",
-                       filename=os.path.basename(chart))
-        msg.attach(img)
+    msg["Subject"] = f"Kronos 股票预测日报 {stock_code} {datetime.now().strftime('%Y-%m-%d')}"
+    msg.attach(MIMEText(summary_html, "html", "utf-8"))
 
     recipients = [r.strip() for r in recipient.replace(";", ",").split(",") if r.strip()]
 
@@ -922,7 +909,8 @@ def send_email():
                 server.starttls()
                 server.login(user, password)
                 server.sendmail(user, recipients, msg.as_string())
-        print(f"✅ 邮件已发送至 {recipient}（正文内嵌 {len(chart_files)} 张 K 线图，并附加原图）")
+        n = summary_html.count("data:image/png;base64,")
+        print(f"✅ 已发送 {stock_code} 预测邮件至 {recipient}（HTML 内嵌 {n} 张 K 线图）")
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
         raise
@@ -958,13 +946,15 @@ def main():
         market_prefix = detect_market_prefix(code)
         for tf in TIMEFRAMES:
             run_prediction(tf, predictor, stock_code=code, market_prefix=market_prefix)
+        # 每只股票跑完所有周期后，立即发送一封包含该股票代码的预测邮件
+        send_email(code)
 
     print(f"\n✅ 全部预测完成! 结果保存在 {OUTPUT_DIR}/ 目录下")
     for code in STOCK_CODES:
         for tf in TIMEFRAMES:
             print(f"   - {code} {tf['label']}: pred_{code}_{tf['file_tag']}_data.csv / _chart.png")
 
-    # ---- 步骤3：生成邮件摘要，写入 outputs/summary.txt（供 GitHub Actions 的 action-send-mail 作为正文读取）----
+    # ---- 步骤3：写一份汇总摘要（HTML + 纯文本）到 outputs/，便于查看/留档（邮件已按股票分别发送）----
     write_summary_file(build_summary())
 
 
