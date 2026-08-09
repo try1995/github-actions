@@ -850,7 +850,7 @@ def send_email(stock_code: str):
     msg = MIMEMultipart()
     msg["From"] = user
     msg["To"] = recipient
-    msg["Subject"] = f"Kronos 股票预测日报 {stock_code} {datetime.now().strftime('%Y-%m-%d')}"
+    msg["Subject"] = f"股票{stock_code}预测 {datetime.now().strftime('%Y-%m-%d')}"
     msg.attach(MIMEText(summary_html, "html", "utf-8"))
 
     recipients = [r.strip() for r in recipient.replace(";", ",").split(",") if r.strip()]
